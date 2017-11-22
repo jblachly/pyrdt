@@ -161,10 +161,43 @@ class GeneralSettings():
         print("class init")
 
         self.field_dict = {}
-        with open("fields_settings.csv", 'r', newline='') as fi:
+        self.field_struct = "< "
+        self.field_names2 = []
+        offset = 0
+        with open("fields_settings.csv", 'r') as fi:
             reader = csv.DictReader(fi)
             for row in reader:
+                print(row)
+                print(offset)
+                row['offset'] = int( row['offset'] )
+                row['bits'] = int( row['bits'] )
+                while row['offset'] > offset:
+                    print(row['offset'], offset)
+                    if ((row['offset'] - offset) % 8) == 0:
+                        self.field_struct += "{:d}x ".format( (row['offset'] - offset) // 8 )
+                        offset += row['bits']
+                    elif (row['offset'] - offset) < 8:
+                        # arrived at the bitfield. Because first bit in bf not bit 0 of bf,
+                        # go ahead and insert marker
+                        self.field_struct += "B "
+                        self.field_names2.append("bitfield")
+                        offset += row['bits']
+                    else:
+                        padding_bytes = math.floor( (row['offset'] - offset) / 8 )
+                        self.field_struct += "{:d}x ".format( padding_bytes )
+                        offset += padding_bytes * 8
+                # TODO insert padding relative to bitfield top-up, if applicable
                 self.field_dict[ row['id'] ] = Field(**row)
+                if row['type'] == "utf16" or row['type'] == "ascii" :
+                    self.field_struct += "{:d}s ".format( int(row['bits']) // 8 )
+                    self.field_names2.append(row['id'])
+                else:
+                    if row['bits'] < 8: # we are dealing with bitfield
+                        # marker should already have been inserted
+                self.field_struct += "B "
+                self.field_names2.append(row['id'])
+                #print("Incrementing offset ({}) by row[bits] ({})".format(offset, row['bits']))
+                offset += row['bits']
 
         field_values = self.general_settings_struct.unpack(file_contents[self.first_record_offset:self.end_record_offset])
         fields = dict(zip(self.field_names, field_values))
