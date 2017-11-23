@@ -157,47 +157,121 @@ class GeneralSettings():
         "pc_programming_password", \
         "radio_name")
 
+    def _read_fields(self, fn):
+        print("_read_fields")
+
+        fields = {}
+        field_struct = "< "
+        field_names  = []
+
+        bitoffset = 0
+
+        bitfield_num = 0    # occasional
+        bfname = "ERROR"
+        active_bitfield = False
+
+        with open(fn, 'r') as fi:
+            reader = csv.DictReader(fi)
+            for row in reader:
+                # Transform int fields to ints
+                row['offset'] = int( row['offset'] )
+                row['bits']   = int( row['bits'] )
+
+                # Diagnostics
+                print( "bitoffset : {}".format(bitoffset))
+                print( "row_offset: {}".format(row['offset']))
+                print( "row_bits  : {}".format(row['bits']))
+                print()
+
+                while row['offset'] > bitoffset:
+                    # Insert octet-aligned padding, if possible
+                    diff = row['offset'] - bitoffset
+                    if diff >= 8:
+                        # End bitfield, in case we were in one
+                        active_bitfield = False
+                        bfname = "ERROR"
+                        # Now pad up to nearest octet
+                        padding_bytes = math.floor( diff / 8)
+                        field_struct += "{}x ".format(padding_bytes)
+                        #bitoffset += row['bits']
+                        #bitoffset += (padding_bytes * 8)    # offset only up to nearest octet
+                        bitoffset = row['offset']
+                    else:
+                        if row['bits'] >= 8: raise ValueError("Apparently a full byte(s) but we ae not octet aligned")
+                        # We have a bit (or two) in a bitfield, but it is not octet aligned
+                        # Use this chance to insert a bitfield
+                        # TODO: but how do we detect start of a bitfield that is octet aligned?
+                        if active_bitfield and ( row['offset'] % 8 > 0):
+                            # We are currently in a bitfield
+                            # No need to create new one
+                            pass
+                        elif active_bitfield and ( row['offset'] % 8 == 0):
+                            # We /WERE/ in a bitfield,
+                            # but have rolled over to a new octet
+                            active_bitfield = False
+                            bfname = "ERROR"
+                            # The code block below will now catch this and begin new bitfield
+
+                        # Now bring the offset where it should be
+                        bitoffset = row['offset']
+                # (end while)
+
+                if row['bits'] < 8:
+                    # deal with bit(s) in bitfield
+                    if active_bitfield and ( row['offset'] % 8 == 0):
+                        # We /WERE/ in a bitfield,
+                        # but have rolled over to a new octet
+                        active_bitfield = False
+                        bfname = "ERROR"
+                        # The code block below will now catch this and begin new bitfield
+
+                    # This looks a little redundant or could be joined with prior if block
+                    # but it is important that the "not active_bitfield" block below execute
+                    # for both not active upon entry to block above but also in case
+                    # the active_bitfield is set to False in the case above
+                    if not active_bitfield:
+                        active_bitfield = True
+                        bitfield_num += 1
+                        bfname = "bitfield" + str(bitfield_num)
+                        field_struct += "B "
+                        field_names.append( bfname )
+                        fields[bfname] = Field(id=bfname)
+                    # < 8 bits: No need to insert into the field_struct for unpacking
+                    # < 8 bits: No need to insert into the field names list for unpacking
+                    # Create the Field obj but indicate it is part of a bitfield
+                    fields[ bfname + ':' + row['id'] ] = Field(**row)
+                elif row['bits'] == 8:
+                    assert( row['offset'] % 8 == 0 )    # Sanity check that we are aligned
+                    field_struct += "B "
+                    field_names.append( row['id'] )
+                    fields[ row['id'] ] = Field(**row)
+                elif row['bits'] > 8 and ( row['bits'] % 8 == 0):
+                    # This will apply equally to ints, strings, BCD
+                    field_struct += "{:d}s ".format( row['bits'] // 8 )
+                    field_names.append( row['id'] )
+                    fields[ row['id'] ] = Field(**row)
+                else:
+                    raise ValueError("bits > 8 but not apparently an even no. of octets")
+                
+                # Don't forget to advance the offset counter
+                bitoffset += row['bits']
+
+                # This is the best place, as far as I can tell, to check if we rolled over
+                # to a new octet, just in case we were in a bitfield, and enter a new one
+                if (bitoffset % 8) == 0:
+                    active_bitfield = False
+                    bitfield_name = "ERROR"
+
+        print("finished reading csv")
+        print( field_names )
+        print( field_struct )
+        print( fields )
+
+
     def __init__(self, file_contents):
         print("class init")
 
-        self.field_dict = {}
-        self.field_struct = "< "
-        self.field_names2 = []
-        offset = 0
-        with open("fields_settings.csv", 'r') as fi:
-            reader = csv.DictReader(fi)
-            for row in reader:
-                print(row)
-                print(offset)
-                row['offset'] = int( row['offset'] )
-                row['bits'] = int( row['bits'] )
-                while row['offset'] > offset:
-                    print(row['offset'], offset)
-                    if ((row['offset'] - offset) % 8) == 0:
-                        self.field_struct += "{:d}x ".format( (row['offset'] - offset) // 8 )
-                        offset += row['bits']
-                    elif (row['offset'] - offset) < 8:
-                        # arrived at the bitfield. Because first bit in bf not bit 0 of bf,
-                        # go ahead and insert marker
-                        self.field_struct += "B "
-                        self.field_names2.append("bitfield")
-                        offset += row['bits']
-                    else:
-                        padding_bytes = math.floor( (row['offset'] - offset) / 8 )
-                        self.field_struct += "{:d}x ".format( padding_bytes )
-                        offset += padding_bytes * 8
-                # TODO insert padding relative to bitfield top-up, if applicable
-                self.field_dict[ row['id'] ] = Field(**row)
-                if row['type'] == "utf16" or row['type'] == "ascii" :
-                    self.field_struct += "{:d}s ".format( int(row['bits']) // 8 )
-                    self.field_names2.append(row['id'])
-                else:
-                    if row['bits'] < 8: # we are dealing with bitfield
-                        # marker should already have been inserted
-                self.field_struct += "B "
-                self.field_names2.append(row['id'])
-                #print("Incrementing offset ({}) by row[bits] ({})".format(offset, row['bits']))
-                offset += row['bits']
+        self._read_fields("fields_settings.csv")
 
         field_values = self.general_settings_struct.unpack(file_contents[self.first_record_offset:self.end_record_offset])
         fields = dict(zip(self.field_names, field_values))
