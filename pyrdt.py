@@ -273,14 +273,34 @@ class Table():
         print( field_struct )
         print( fields )
         print()
+        #pdb.set_trace()
         self.field_names = field_names
         self.field_struct_string = field_struct
         self.fields = fields
 
-    def _expand_bitfields(self, bitfield, fieldset):
+    def _expand_bitfields(self, k, v, fieldset):
         """Automatically fill in fields from a bitfield"""
-        #TODO
-        pass
+        if len(k) < 8: return   # Not bitfield
+        elif k[0:8] == "bitfield" and ':' not in k:
+            # k is a raw bitfield and not a bitfield:subfield
+            bfnum = int( k[8:] )
+            # Find subfields that are a part of this bitfield
+            for fid,field in fieldset.items():
+                if field.type == 'bitfield': continue    # raw bitfield -- we are looking for subfields
+                # ex:
+                # k = bitfield7
+                # v = raw bitfield
+                # fid = "bitfield7:realfield_name"
+                # field = realfield's data (initially uninitialized)
+                if fid.startswith(k):
+                    # Okay, now decompose v
+                    lsbit_within_octet = field.offset % 8   # zero indexed
+                    # make bitmask in lsb positions and then shift left
+                    bitmask = ((2 ** field.bits) - 1) << lsbit_within_octet
+                    field.value = (v & bitmask) >> lsbit_within_octet
+
+        else:
+            return
     
     def add_lut(self, fieldid, lut):
         self.fields[fieldid].add_lut(lut)
@@ -304,13 +324,13 @@ class Table():
 
             for k,v in fields_raw.items():
                 print("k,v=", k, v)
-                self._expand_bitfields({k:v}, fieldset)
+                self._expand_bitfields(k, v, fieldset)
                 fieldset[k].value = v
                 fieldset[k].validate()
             
             print("fieldset post load =")
             pprint.pprint( fieldset )
-            #pdb.set_trace()
+            pdb.set_trace()
             self.rows.append( fieldset )
     
     def dump(self):
@@ -344,6 +364,7 @@ class Settings(Table):
         print("General init")
         super().__init__(Settings.tabledef_fn)
 
+        self.add_lut("talk_permit_tone", {0: "none", 1: "digital", 2: "analog", 3: "both"} )
         self.add_lut("mode", {0: "MR", 255: "CH" } )
 
 class GeneralSettings(Table):
@@ -511,3 +532,40 @@ class RDTFile():
         self.settings.load(file_contents)
         self.channels.load(file_contents)
 
+def record_prettyprint(record):
+    #TODO need to specify field order somehow
+    field_descr_lens = [len(field.description) for field in record.values()]
+    max_descr_width = max(field_descr_lens)
+    for field in record.values():
+        print("{descr:{width}s} : {repr}".format(descr=field.description, width=max_descr_width, repr=field))
+
+def main():
+    parser = argparse.ArgumentParser(description = "Read and write RDT codeplug files")
+    parser.add_argument("-f", "--file", help="RDT codeplug file")
+    subparsers = parser.add_subparsers(dest="subparser_name", help="Subcommand help")
+
+    settings_cmd = subparsers.add_parser("settings", help="General radio settings")
+    settings_cmd.add_argument("subcommand", choices=['get','set'], help="What to do with settings")
+    settings_cmd.add_argument("field", help="get: <field|all> | set: <field=value>")
+
+    channels_cmd = subparsers.add_parser("channels", help="Radio channel settings")
+    channels_cmd.add_argument("subcommand", choices=['list', 'export', 'import'], help="What to do with radio channels")
+    
+    args = parser.parse_args()
+
+    rdtfile = RDTFile(args.file)
+
+    if args.subparser_name == "settings":
+        if args.subcommand == "get":
+            if args.field == "all":
+                record_prettyprint( rdtfile.settings.rows[0] )
+    elif args.subparser_name == "channels":
+        pass
+    else:
+        print("Unknown subcommand {}".format(args.subparser_name))
+        return 1
+
+    return 0
+
+if __name__ == "__main__":
+    main()
