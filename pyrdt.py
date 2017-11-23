@@ -1,7 +1,12 @@
+# http://www.iz2uuf.net/wp/index.php/2016/06/04/tytera-dm380-codeplug-binary-format/
+
 import argparse
 import struct
 import math
 import csv
+import copy
+import pdb
+import pprint
 
 def bcd_decode(barray):
     # Little Endian decoder
@@ -41,39 +46,75 @@ class Field():
 
         self.loaded = False     # change to true when data loaded
 
-    def __str__(self):
+    def __repr__(self):
+        if self.type == "bitfield":
+            return "<bitfield>"
         if not self.loaded:
             return "<UNINITIALIZED>"
+        if self.zero_valued():
+            return "Unset/Disabled"
+        
         if self.type == "ascii":
-            return self.value.decode('ascii')
-        if self.type == "unicode" or self.type == "utf16":
-            return self.value.decode('utf-16').rstrip('\x00')
-        elif self.type == "int":
+            return self._value.decode('ascii')
+        elif self.type == "unicode" or self.type == "utf16":
+            return self._value.decode('utf-16').rstrip('\x00')
+        elif self.type == "int" or self.type == "binary":
             try:    # transform
                 pass
             except AttributeError:
                 pass
-            return self.value
+            if type( self._value) is int:
+                return str( self._value)
+            elif type( self._value) is bytes:
+                return str( int.from_bytes(self._value, "little") )
+            else:
+                return "**UNANTICIPATED int/binary SITUATION**"
         elif self.type == "bcd":    # Little Endian
-            return bcd_decode(self.value)
+            return str( bcd_decode(self._value) )
         elif self.type == "rev_bcd":    # Big Endian
-            return bcd_decode( reversed(self.value) )
+            return str( bcd_decode( reversed(self._value) ) )
         elif self.type == "bcdt":
             # Same as BCD but 2-msb of second octet encode squelch type
-            value_copy = bytearray(self.value)
+            value_copy = bytearray(self._value)
             value_copy[1] &= 0b00111111     # Zero out the squelch coding bits
             tone = bcd_decode(value_copy)
 
             # Examine the squelch coding bits
-            squelch_type_id = ( self.value[1] & 0b11000000 ) >> 6
+            squelch_type_id = ( self._value[1] & 0b11000000 ) >> 6
+            print("squelch_type_id=", squelch_type_id)
             if squelch_type_id == 0:
                 return "CTCSS {}".format(tone / 10.0)
             elif squelch_type_id==1:
                 return "DCS D{}N".format(tone)
             elif squelch_type_id==2:
                 return "DCS D{}I".format(tone)
-            
+            else:
+                return "BCDT unknown: squelch_type_id={}, tone={}, raw={}".format(squelch_type_id, tone, value_copy)
+        else:
+            return "<unhandled __repr__>"
 
+        return "<<end of __repr__>>"
+    
+    @property
+    def value(self):
+        return self._value # TODO return __repr__ ?
+    
+    @value.setter
+    def value(self, value):
+        self._value = value
+        self.loaded = True
+    
+    def zero_valued(self):
+        possibly_zeroed = False
+        if self.bits == 8:
+            return (self._value is self.zero_value)
+        elif self.bits >= 16:
+            for octet in self._value:
+                if octet == self.zero_value: possibly_zeroed = True
+                else: return False
+            return possibly_zeroed
+        else:
+            return False
     def add_constraint(self):
         pass
     
@@ -95,67 +136,32 @@ class Field():
     def validate(self):
         if self.type == "int":
             try:
-                if self.value > self.max_value:
-                    raise ValueError("{} : {} greater than defined maximum {}".format(self.id, self.value, self.max_value))
+                if self._value > self.max_value:
+                    raise ValueError("{} : {} greater than defined maximum {}".format(self.id, self._value, self.max_value))
             except AttributeError:
                 pass # no max defined
             try:
-                if self.value < self.min_value:
-                    raise ValueError("{} : {} less than defined minimum {}".format(self.id, self.value, self.min_value))
+                if self._value < self.min_value:
+                    raise ValueError("{} : {} less than defined minimum {}".format(self.id, self._value, self.min_value))
             except AttributeError:
                 pass # no min defined
             try:
-                if self.value not in self.allowed_values:
-                    raise ValueError("{} : {} not in permitted values list".format(self.id, self.value))
+                if self._value not in self.allowed_values:
+                    raise ValueError("{} : {} not in permitted values list".format(self.id, self._value))
             except AttributeError:
                 pass # no allowed_values defined
             
             # Constraints is defined as an empty list at class instantiation
-            for c in constraints:
+            for c in self.constraints:
                 # check value against constraint by execing the pythonc ode
                 # TODO
                 pass
             
             return True
 
-
-# http://www.iz2uuf.net/wp/index.php/2016/06/04/tytera-dm380-codeplug-binary-format/
-class Channel():
-    first_record_offset = 127013
-    record_length = 64
-    end_record_offset = first_record_offset + record_length
-
-    channel_struct = struct.Struct("<c c c c c x h c B c B B x c x 4s 4s 2s 2s c c x x 32s")
-
-# http://www.iz2uuf.net/wp/index.php/2016/06/04/tytera-dm380-codeplug-binary-format/
-class GeneralSettings():
-    first_record_offset = 8805
-    record_length = 136 # 144
-    end_record_offset = first_record_offset + record_length
-
-    # NB the 'x I' following 'B B B'. This is radio_id, which is 24-bits
-    # radio_id is actually a 24-bit unsigned int (max 2^24 ~ 16,776,415 [actually 801 higher?])
-    # but since we are storing in little endian byte order and the following byte
-    # is unused, we can unpack as I (unsigned 32-bit integer)
-    # The alternative would have been '...B I x' but that leftshifts radio id by 8 bits!
-    # or to unpack 3 bytes by hand and constrct the 24-bit int by multiplication...
-    # Luckily the following octet is zero. e.g. 0xFF 0xFF 0xFF 0x00 = 2^24
-    # Will have to be cautious though as the final octet is not guaranteed(?) to be zero
-    general_settings_struct = struct.Struct("<20s 20s 24x B B B x I B B B B 2x B B B B x \
-                                            B B B B B \
-                                            4s 4s \
-                                            8s \
-                                            32s")
-    field_names = ("info1", "info2", \
-        "bitfield1", "bitfield2", "bitfield3", \
-        "radio_id", "tx_preamble", "group_call_hangtime", "private_call_hangtime", \
-        "vox_sensitivity", "rx_lowbat_interval", "call_alert_tone", \
-        "lone_worker_resp_time", "lone_worker_reminder_time", \
-        "scan_digital_hangtime", "scan_analog_hangtime", \
-        "unknown1", "keypad_lock_time", "mode", \
-        "poweron_password", "radio_programming_password", \
-        "pc_programming_password", \
-        "radio_name")
+class Table():
+    num_records = 1         # Must override except for general_settings
+    zero_value  = 0xFF      # Overrride if diff
 
     def _read_fields(self, fn):
         print("_read_fields")
@@ -235,21 +241,21 @@ class GeneralSettings():
                         bfname = "bitfield" + str(bitfield_num)
                         field_struct += "B "
                         field_names.append( bfname )
-                        fields[bfname] = Field(id=bfname)
+                        fields[bfname] = Field(id=bfname, type="bitfield")
                     # < 8 bits: No need to insert into the field_struct for unpacking
                     # < 8 bits: No need to insert into the field names list for unpacking
                     # Create the Field obj but indicate it is part of a bitfield
-                    fields[ bfname + ':' + row['id'] ] = Field(**row)
+                    fields[ bfname + ':' + row['id'] ] = Field(**row, zero_value=self.zero_value)
                 elif row['bits'] == 8:
                     assert( row['offset'] % 8 == 0 )    # Sanity check that we are aligned
                     field_struct += "B "
                     field_names.append( row['id'] )
-                    fields[ row['id'] ] = Field(**row)
+                    fields[ row['id'] ] = Field(**row, zero_value=self.zero_value)
                 elif row['bits'] > 8 and ( row['bits'] % 8 == 0):
                     # This will apply equally to ints, strings, BCD
                     field_struct += "{:d}s ".format( row['bits'] // 8 )
                     field_names.append( row['id'] )
-                    fields[ row['id'] ] = Field(**row)
+                    fields[ row['id'] ] = Field(**row, zero_value=self.zero_value)
                 else:
                     raise ValueError("bits > 8 but not apparently an even no. of octets")
                 
@@ -266,12 +272,114 @@ class GeneralSettings():
         print( field_names )
         print( field_struct )
         print( fields )
+        print()
+        self.field_names = field_names
+        self.field_struct_string = field_struct
+        self.fields = fields
 
+    def _expand_bitfields(self, bitfield, fieldset):
+        """Automatically fill in fields from a bitfield"""
+        #TODO
+        pass
+    
+    def add_lut(self, fieldid, lut):
+        self.fields[fieldid].add_lut(lut)
+
+    def load(self, data):
+        print("Table::load()")
+        self.field_struct = struct.Struct(self.field_struct_string)
+
+        self.rows = []
+        for i in range(self.num_records):
+            print("i=", i)
+            fieldset = copy.deepcopy(self.fields)
+            # TODO subset the data outside of here
+            # TODO include record offset with i and recordsize
+            current_record_offset   = self.first_record_offset + (self.record_length * i)
+            current_record_end      = current_record_offset + self.record_length
+            print("DEBUG: field_struct_string=", self.field_struct_string)
+            field_values =  self.field_struct.unpack( data[ current_record_offset:current_record_end ] )
+            fields_raw = dict(zip(self.field_names, field_values))
+            print("fields_raw=", fields_raw)
+
+            for k,v in fields_raw.items():
+                print("k,v=", k, v)
+                self._expand_bitfields({k:v}, fieldset)
+                fieldset[k].value = v
+                fieldset[k].validate()
+            
+            print("fieldset post load =")
+            pprint.pprint( fieldset )
+            #pdb.set_trace()
+            self.rows.append( fieldset )
+    
+    def dump(self):
+        pass
+    
+    def __init__(self, tabledef_fn):
+        self._read_fields(tabledef_fn)
+        #self._expand_bitfields()
+
+class Channel(Table):
+    tabledef_fn = "fields_channel.csv"
+    num_records = 1000
+    first_record_offset = 127013
+    record_length = 64
+    end_record_offset = first_record_offset + record_length
+    zero_value = 0xFF
+
+    #channel_struct = struct.Struct("<c c c c c x h c B c B B x c x 4s 4s 2s 2s c c x x 32s")
+    def __init__(self):
+        print("Channel init")
+        super().__init__(Channel.tabledef_fn)
+
+class Settings(Table):
+    tabledef_fn = "fields_settings.csv"
+    num_recods = 1
+    first_record_offset = 8805
+    record_length = 144
+    zero_value = 0xFF
+
+    def __init__(self):
+        print("General init")
+        super().__init__(Settings.tabledef_fn)
+
+        self.add_lut("mode", {0: "MR", 255: "CH" } )
+
+class GeneralSettings(Table):
+    tabledef_fn = "fields_settings.csv"
+    first_record_offset = 8805
+    record_length = 136 # 144
+    end_record_offset = first_record_offset + record_length
+
+    # NB the 'x I' following 'B B B'. This is radio_id, which is 24-bits
+    # radio_id is actually a 24-bit unsigned int (max 2^24 ~ 16,776,415 [actually 801 higher?])
+    # but since we are storing in little endian byte order and the following byte
+    # is unused, we can unpack as I (unsigned 32-bit integer)
+    # The alternative would have been '...B I x' but that leftshifts radio id by 8 bits!
+    # or to unpack 3 bytes by hand and constrct the 24-bit int by multiplication...
+    # Luckily the following octet is zero. e.g. 0xFF 0xFF 0xFF 0x00 = 2^24
+    # Will have to be cautious though as the final octet is not guaranteed(?) to be zero
+    general_settings_struct = struct.Struct("<20s 20s 24x B B B x I B B B B 2x B B B B x \
+                                            B B B B B \
+                                            4s 4s \
+                                            8s \
+                                            32s")
+    field_names = ("info1", "info2", \
+        "bitfield1", "bitfield2", "bitfield3", \
+        "radio_id", "tx_preamble", "group_call_hangtime", "private_call_hangtime", \
+        "vox_sensitivity", "rx_lowbat_interval", "call_alert_tone", \
+        "lone_worker_resp_time", "lone_worker_reminder_time", \
+        "scan_digital_hangtime", "scan_analog_hangtime", \
+        "unknown1", "keypad_lock_time", "mode", \
+        "poweron_password", "radio_programming_password", \
+        "pc_programming_password", \
+        "radio_name")
 
     def __init__(self, file_contents):
         print("class init")
 
-        self._read_fields("fields_settings.csv")
+        super()._read_fields(self.tabledef_fn)
 
         field_values = self.general_settings_struct.unpack(file_contents[self.first_record_offset:self.end_record_offset])
         fields = dict(zip(self.field_names, field_values))
@@ -392,7 +500,14 @@ class GeneralSettings():
     info_line1 = property(_get_info1, _set_info1)
     info_line2 = property(_get_info2, _set_info2)
 
-with open("md380_james.rdt", "rb") as fi:
-    file_contents = fi.read()
+class RDTFile():
+    def __init__(self, fn):
+        self.settings = Settings()
+        self.channels = Channel()
 
-gs = GeneralSettings(file_contents)
+        with open(fn, "rb") as fi:
+            file_contents = fi.read()
+        
+        self.settings.load(file_contents)
+        self.channels.load(file_contents)
+
