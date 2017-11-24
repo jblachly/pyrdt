@@ -279,8 +279,15 @@ class Table():
         self.fields = fields
 
     def _expand_bitfields(self, k, v, fieldset):
-        """Automatically fill in fields from a bitfield"""
-        if len(k) < 8: return   # Not bitfield
+        """Automatically fill in fields from a bitfield
+        
+        Take a key/value pair and check if it is bitfield type.
+        If yes, search through fieldset for its constituents
+        and expand it into them. Return True to signal ok to delete.
+
+        If no, return False and move on.
+        """
+        if len(k) < 8: return False   # Not bitfield
         elif k[0:8] == "bitfield" and ':' not in k:
             # k is a raw bitfield and not a bitfield:subfield
             bfnum = int( k[8:] )
@@ -299,9 +306,35 @@ class Table():
                     bitmask = ((2 ** field.bits) - 1) << lsbit_within_octet
                     field.value = (v & bitmask) >> lsbit_within_octet
 
+            return True
         else:
-            return
+            # Any other type of field, including subfield of bitfield
+            return False
     
+    def _rename_bitfield_subfields(self, fieldset):
+        """Remove the leading 'bitfieldN:' from bitfield subfields
+        
+        By this point there should be no type:bitfield raw bitfields left,
+        so it is okay to check for [0:8] == bitfield
+        """
+        # We can't rename keys during iteration
+        rename_list = []
+        for fid, field in fieldset.items():
+            if len(fid) < 8: continue
+            if fid[0:8] == "bitfield":
+                rename_list.append(fid)
+
+        for fid in rename_list:
+            fn_pos = fid.index(':') + 1
+            subfield_name = fid[fn_pos:]    # take everything after the :
+            # Okay, we must rename two things:
+            # (1) key in the fieldset dict
+            # (2) the field's 'id' property
+            fieldset[subfield_name] = fieldset.pop(fid)
+            fieldset[subfield_name].id = subfield_name
+        
+        return fieldset
+
     def add_lut(self, fieldid, lut):
         self.fields[fieldid].add_lut(lut)
 
@@ -322,15 +355,25 @@ class Table():
             fields_raw = dict(zip(self.field_names, field_values))
             print("fields_raw=", fields_raw)
 
+            # Once a bitfield is expanded into its consituent subfields, mark for deletion
+            deletion_list = []
             for k,v in fields_raw.items():
                 print("k,v=", k, v)
-                self._expand_bitfields(k, v, fieldset)
+                if self._expand_bitfields(k, v, fieldset):
+                    # Has been expanded completely -- okay to remove (but not during iteration)
+                    deletion_list.append(k)
                 fieldset[k].value = v
                 fieldset[k].validate()
-            
+
+            # Remove the raw bitfields
+            for k in deletion_list:
+                del fieldset[k]            
+            # Strip the leading "bitfieldN:" from subfield ids
+            fieldset = self._rename_bitfield_subfields(fieldset)
+
             print("fieldset post load =")
             pprint.pprint( fieldset )
-            pdb.set_trace()
+            #pdb.set_trace()
             self.rows.append( fieldset )
     
     def dump(self):
@@ -364,7 +407,10 @@ class Settings(Table):
         print("General init")
         super().__init__(Settings.tabledef_fn)
 
-        self.add_lut("talk_permit_tone", {0: "none", 1: "digital", 2: "analog", 3: "both"} )
+        #self.add_lut("monitor_type", {0: "silent", 1: "open"})
+        #self.add_lut("talk_permit_tone", {0: "none", 1: "digital", 2: "analog", 3: "both"} )
+        #self.add_lut("intro_screen", {0: "info strings", 1: "graphic"})
+        self.add_lut("keypad_lock_time", {1: "5 sec", 2: "10 sec", 3: "15 sec", 255: "manual"})
         self.add_lut("mode", {0: "MR", 255: "CH" } )
 
 class GeneralSettings(Table):
