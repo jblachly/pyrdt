@@ -407,6 +407,12 @@ class Settings(Table):
         print("General init")
         super().__init__(Settings.tabledef_fn)
 
+        # At this point the RDT file has not been loaded, 
+        # so bitfield-subfield fields have not been renamed yet
+        # Solution is to (1) either include RDT file as part of __init__
+        # (2) have the Table.add_lut function do additional lookup prefixing with bitfieldNN:
+        # (3) change the bitfieldN prperty to some other metadata field, (i.e. not encoded in the name) or
+        # (4) add the LUT after RDT file loaded (bad choice due to having to add it to 1000 separate fields)
         #self.add_lut("monitor_type", {0: "silent", 1: "open"})
         #self.add_lut("talk_permit_tone", {0: "none", 1: "digital", 2: "analog", 3: "both"} )
         #self.add_lut("intro_screen", {0: "info strings", 1: "graphic"})
@@ -580,10 +586,17 @@ class RDTFile():
 
 def record_prettyprint(record):
     #TODO need to specify field order somehow
-    field_descr_lens = [len(field.description) for field in record.values()]
+    #TODO: is dict.values() deterministic for any fixed dict?
+    field_id_lens   = [len(field.id) for field in record.values()]
+    field_descr_lens= [len(field.description) for field in record.values()]
+    max_id_width    = max(field_id_lens)
     max_descr_width = max(field_descr_lens)
+    print("{id:{width_id}s} {descr:{width_descr}s} Value".format(id="key", width_id=max_id_width, descr="Description", width_descr=max_descr_width))
     for field in record.values():
-        print("{descr:{width}s} : {repr}".format(descr=field.description, width=max_descr_width, repr=field))
+        print("{id:{width_id}s} {descr:{width_descr}s} {repr}".format(\
+            id=field.id, width_id=max_id_width, \
+            descr=field.description, width_descr=max_descr_width, \
+            repr=field))
 
 def main():
     parser = argparse.ArgumentParser(description = "Read and write RDT codeplug files")
@@ -605,6 +618,19 @@ def main():
         if args.subcommand == "get":
             if args.field == "all":
                 record_prettyprint( rdtfile.settings.rows[0] )
+            elif args.field:
+                if args.field in rdtfile.settings.field_names:
+                    print("{}\t{}".format(args.field, rdtfile.settings.rows[0][args.field]))
+                else:
+                    print("{} is not a valid field key name.\n\nChoices: {}".format(\
+                        args.field, rdtfile.settings.field_names))
+            else:
+                print("TODO: print usage -- get <fieldname|all> (should have been caught by parser though)")
+        elif args.subcommand == "set":
+            print("TODO: Set a field and write back file")
+        else:
+            raise ValueError("subcommand neither get nor set -- should have been caught by arg parser")
+        
     elif args.subparser_name == "channels":
         pass
     else:
