@@ -318,11 +318,14 @@ class Table():
                         bfname = "bitfield" + str(bitfield_num)
                         field_struct += "B "
                         field_names.append( bfname )
-                        fields[bfname] = Field(id=bfname, type="bitfield")
+                        fields[bfname] = Field(id=bfname, type="bitfield", constituents=[])
                     # < 8 bits: No need to insert into the field_struct for unpacking
                     # < 8 bits: No need to insert into the field names list for unpacking
                     # Create the Field obj but indicate it is part of a bitfield
-                    fields[ bfname + ':' + row['id'] ] = Field(**row, zero_value=self.zero_value)
+                    #fields[ bfname + ':' + row['id'] ] = Field(**row, zero_value=self.zero_value)
+                    fields[ row['id'] ] = Field(**row, zero_value=self.zero_value, bitfield=bfname)
+                    # Also mark this field as a constituent to locate when (de)serializing
+                    fields[ bfname ].constituents.append(row['id'])
                 elif row['bits'] == 8:
                     assert( row['offset'] % 8 == 0 )    # Sanity check that we are aligned
                     field_struct += "B "
@@ -370,6 +373,17 @@ class Table():
             # k is a raw bitfield and not a bitfield:subfield
             bfnum = int( k[8:] )
             # Find subfields that are a part of this bitfield
+            if fieldset[k].constituents:
+                for cname in fieldset[k].constituents:
+                    field = fieldset[cname]
+                    # Okay, now decompose v
+                    lsbit_within_octet = field.offset % 8   # zero indexed
+                    # make bitmask in lsb positions and then shift left
+                    bitmask = ((2 ** field.bits) - 1) << lsbit_within_octet
+                    field.value = (v & bitmask) >> lsbit_within_octet
+            else:
+                raise ValueError("Apparently a bitfield but no constiuents")
+            '''    
             for fid,field in fieldset.items():
                 if field.type == 'bitfield': continue    # raw bitfield -- we are looking for subfields
                 # ex:
@@ -383,7 +397,7 @@ class Table():
                     # make bitmask in lsb positions and then shift left
                     bitmask = ((2 ** field.bits) - 1) << lsbit_within_octet
                     field.value = (v & bitmask) >> lsbit_within_octet
-
+            '''
             return True
         else:
             # Any other type of field, including subfield of bitfield
@@ -454,6 +468,11 @@ class Table():
 
             # Once a bitfield is expanded into its consituent subfields, mark for deletion
             deletion_list = []
+            
+            # Iterate through every raw field from the record (row) and
+            # 1) expand bitfield (if it is)
+            # 2) enter its value into the Field in the Row object instance
+            # 3) validate the Field
             for k,v in fields_raw.items():
                 if DEBUG: print("k,v=", k, v)
                 if self._expand_bitfields(k, v, row):
@@ -473,7 +492,7 @@ class Table():
                 del row[k]
             # Strip the leading "bitfieldN:" from subfield ids
             ###fieldset = self._rename_bitfield_subfields(fieldset)
-            row = self._rename_bitfield_subfields(row)
+            #row = self._rename_bitfield_subfields(row)
 
             if DEBUG:
                 print("row post load =")
@@ -596,9 +615,9 @@ class Settings(Table):
         # (2) have the Table.add_lut function do additional lookup prefixing with bitfieldNN:
         # (3) change the bitfieldN prperty to some other metadata field, (i.e. not encoded in the name) or
         # (4) add the LUT after RDT file loaded (bad choice due to having to add it to 1000 separate fields)
-        #self.add_lut("monitor_type", {0: "silent", 1: "open"})
-        #self.add_lut("talk_permit_tone", {0: "none", 1: "digital", 2: "analog", 3: "both"} )
-        #self.add_lut("intro_screen", {0: "info strings", 1: "graphic"})
+        self.add_lut("monitor_type", {0: "silent", 1: "open"})
+        self.add_lut("talk_permit_tone", {0: "none", 1: "digital", 2: "analog", 3: "both"} )
+        self.add_lut("intro_screen", {0: "info strings", 1: "graphic"})
         self.add_lut("keypad_lock_time", {1: "5 sec", 2: "10 sec", 3: "15 sec", 255: "manual"})
         self.add_lut("mode", {0: "MR", 255: "CH" } )
 
