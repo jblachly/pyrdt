@@ -377,10 +377,17 @@ class Table():
                 for cname in fieldset[k].constituents:
                     field = fieldset[cname]
                     # Okay, now decompose v
-                    lsbit_within_octet = field.offset % 8   # zero indexed
-                    # make bitmask in lsb positions and then shift left
-                    bitmask = ((2 ** field.bits) - 1) << lsbit_within_octet
-                    field.value = (v & bitmask) >> lsbit_within_octet
+                    # Note that my original interpretation of the numbering of bits
+                    # was wrong -- since the CSV numbers absolute bits, rather than
+                    # from LSB, within each octet my original code was at wrong end
+                    # e.g., if CSV said bit offset 0, that would be first octet of data
+                    # but would be the MSBit of that octet, not LSB. Changed shifts.
+                    bit_within_octet = (field.offset % 8)   # zero indexed from MSB
+                    # make bitmask in position(s) and then shift left
+                    #bitmask = ((2 ** field.bits) - 1) << lsbit_within_octet
+                    bitmask = ((2 ** field.bits) - 1) << (8 - bit_within_octet - field.bits)
+                    #field.value = (v & bitmask) >> lsbit_within_octet
+                    field.value = (v & bitmask) >> (8 - bit_within_octet - field.bits)
             else:
                 raise ValueError("Apparently a bitfield but no constiuents")
             '''    
@@ -848,7 +855,6 @@ def main():
     print("*** Special thanks to IZ2UUF and Travis Goodspeed (KK4VCZ) for documenting the RDT file format:")
     print("    {}".format(url1))
     print("    {}\n".format(url2))
-    print("*** and Travis Goodspeed ")
 
     parser = argparse.ArgumentParser(description = "Read and write RDT codeplug files")
     parser.add_argument("-f", "--file", help="RDT codeplug file")
