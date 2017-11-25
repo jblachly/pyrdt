@@ -1,0 +1,8 @@
+table,tabledef_fn,num_records,first_record_offset,record_length,zero_value,deletion_marker_offset,deletion_marker_value
+settings,fields_settings.csv,1,8805,144,255,0,255
+channels,fields_channel.csv,1000,127013,64,255,16,255
+contacts,fields_contact.csv,1000,24997,36,255,4,5
+rxgroups,fields_rxgroup.csv,250,60997,96,0,0,0
+scanlists,fields_scanlist.csv,250,100997,104,0,0,0
+textmessages,fields_textmsg.csv,50,9125,288,0,0,0
+zones,fields_zones.csv,250,84997,64,0,0,0

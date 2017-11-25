@@ -828,6 +828,7 @@ def prettyprint_record(record):
     print("{id:{width_id}s} {descr:{width_descr}s} Value".format(id="key", width_id=max_id_width, descr="Description", width_descr=max_descr_width))
     print("-"*80)
     for field in record.values():
+        # TODO: add support for hidden rows
         print("{id:{width_id}s} {descr:{width_descr}s} {repr}".format(\
             id=field.id, width_id=max_id_width, \
             descr=field.description, width_descr=max_descr_width, \
