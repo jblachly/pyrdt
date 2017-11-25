@@ -1,0 +1,1 @@
+id,description,type,offset,bitscall_id,Contact ID (DMR #),binary,0,24call_receive_tone,CallReceiveTone,binary,26,1call_type,CallType,binary,30,2name,Name,utf16,32,256

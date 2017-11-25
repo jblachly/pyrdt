@@ -396,7 +396,6 @@ class Table():
         self.fields[fieldid].add_lut(lut)
 
     def load(self, data):
-        print("Table::load()")
         self.field_struct = struct.Struct(self.field_struct_string)
 
         self.rows = []
@@ -452,13 +451,17 @@ class Table():
     def __init__(self, tabledef_fn):
         self._read_fields(tabledef_fn)
         #self._expand_bitfields()
+    
+    @property
+    def end_record_offset(self):
+        return self.first_record_offset + self.record_length
 
 class Channel(Table):
     tabledef_fn = "fields_channel.csv"
     num_records = 1000
     first_record_offset = 127013
     record_length = 64
-    end_record_offset = first_record_offset + record_length
+    #end_record_offset = first_record_offset + record_length
     zero_value = 0xFF
 
     deletion_marker_offset  = 16    # bytes
@@ -466,8 +469,75 @@ class Channel(Table):
 
     #channel_struct = struct.Struct("<c c c c c x h c B c B B x c x 4s 4s 2s 2s c c x x 32s")
     def __init__(self):
-        print("Channel init")
         super().__init__(Channel.tabledef_fn)
+
+class Contact(Table):
+    tabledef_fn = "fields_contact.csv"
+    num_records = 1000
+    first_record_offset = 24997
+    record_length = 36
+    #end_record_offset = first_record_offset + record_length
+    zero_value = 0xFF
+
+    deletion_marker_offset  = 4         # TODO: technically shoudl be bits 32 and 40 (bytes 4 and 4)
+    deletion_marker_value   = 0x00
+
+    def __init__(self):
+        super().__init__(Contact.tabledef_fn)
+
+class RxGroup(Table):
+    tabledef_fn = "fields_rxgroup.csv"
+    num_records = 250
+    first_record_offset = 60997
+    record_length = 96
+    #end_record_offset = first_record_offset + record_length
+    zero_value = 0x00
+
+    deletion_marker_offset  = 0
+    deletion_marker_value   = 0x00
+
+    def __init__(self):
+        super().__init__(RxGroup.tabledef_fn)
+
+class Scanlist(Table):
+    tabledef_fn = "fields_scanlist.csv"
+    num_records = 250
+    first_record_offset = 100997
+    record_length = 104
+    zero_value = 0x00
+
+    deletion_marker_offset  = 0
+    deletion_marker_value   = 0x00
+
+    def __init__(self):
+        super().__init__(Scanlist.tabledef_fn)
+
+class Textmessage(Table):
+    tabledef_fn = "fields_textmsg.csv"
+    num_records = 50
+    first_record_offset = 9125
+    record_length = 288
+    zero_value = 0x00
+
+    deletion_marker_offset  = 0
+    deletion_marker_value   = 0x00
+
+    def __init__(self):
+        super().__init__(Textmessage.tabledef_fn)
+
+class Zone(Table):
+    tabledef_fn = "fields_zone.csv"
+    num_records         = 250
+    first_record_offset = 84997
+    record_length       = 64
+    zero_value          = 0x00
+
+    deletion_marker_offset  = 0
+    deletion_marker_value   = 0x00
+
+    def __init__(self):
+        super().__init__(Zone.tabledef_fn)
+    
 
 class Settings(Table):
     tabledef_fn = "fields_settings.csv"
@@ -480,7 +550,6 @@ class Settings(Table):
     deletion_marker_value   = 0x01  # since Settings has only one row / can't be del'd
 
     def __init__(self):
-        print("General init")
         super().__init__(Settings.tabledef_fn)
 
         # At this point the RDT file has not been loaded, 
@@ -651,14 +720,28 @@ class GeneralSettings(Table):
 
 class RDTFile():
     def __init__(self, fn):
-        self.settings = Settings()
-        self.channels = Channel()
+        print("Loading {}...".format(fn), end='', flush=True)
+
+        self.settings   = Settings()
+        self.channels   = Channel()
+        self.contacts   = Contact()
+        self.rxgroups   = RxGroup()
+        self.scanlists  = Scanlist()
+        self.textmessages = Textmessage()
+        self.zones      = Zone()
 
         with open(fn, "rb") as fi:
             file_contents = fi.read()
         
         self.settings.load(file_contents)
         self.channels.load(file_contents)
+        self.contacts.load(file_contents)
+        self.rxgroups.load(file_contents)
+        self.scanlists.load(file_contents)
+        self.textmessages.load(file_contents)
+        self.zones.load(file_contents)
+
+        print("ok\n")
 
 def record_prettyprint(record):
     #TODO need to specify field order somehow
@@ -691,6 +774,11 @@ def prettyprint_table(rows, field_names = ['name']):
             print( format_string.format(i+1, *field_values) )   # ids are 1-indexed :-/
 
 def main():
+    print("\npyRDT by AE5ST\n")
+    url = "http://www.iz2uuf.net/wp/index.php/2016/06/04/tytera-dm380-codeplug-binary-format/"
+    print("*** Special thanks to IZ2UUF for documenting the RDT file format:")
+    print("    {}\n".format(url))
+
     parser = argparse.ArgumentParser(description = "Read and write RDT codeplug files")
     parser.add_argument("-f", "--file", help="RDT codeplug file")
     subparsers = parser.add_subparsers(dest="subparser_name", help="Subcommand help")
@@ -699,9 +787,9 @@ def main():
     settings_cmd.add_argument("subcommand", choices=['get','set'], help="What to do with settings")
     settings_cmd.add_argument("field", help="get: <field|all> | set: <field=value>")
 
-    channels_cmd = subparsers.add_parser("channels", help="Radio channel settings")
-    channels_cmd.add_argument("subcommand", choices=['list', 'export', 'import'], help="What to do with radio channels")
-    
+    list_cmd = subparsers.add_parser("list", help="List items in table form")
+    list_cmd.add_argument("table", choices=['channels', 'contacts', 'rxgroups', 'scanlists', 'textmessages', 'zones'], help="Which table?")
+
     args = parser.parse_args()
 
     rdtfile = RDTFile(args.file)
@@ -722,12 +810,22 @@ def main():
             print("TODO: Set a field and write back file")
         else:
             raise ValueError("subcommand neither get nor set -- should have been caught by arg parser")
-        
-    elif args.subparser_name == "channels":
-        if args.subcommand == "list":
+    
+    elif args.subparser_name == "list":
+        if args.table == "channels":
             prettyprint_table( rdtfile.channels.rows, ['name', 'contact_name'] )
+        elif args.table == "contacts":
+            prettyprint_table( rdtfile.contacts.rows, ['name', 'call_id'] )
+        elif args.table == "rxgroups":
+            prettyprint_table( rdtfile.rxgroups.rows, ['name'] )
+        elif args.table == "scanlists":
+            prettyprint_table( rdtfile.scanlists.rows )
+        elif args.table == "textmessages":
+            prettyprint_table( rdtfile.textmessages.rows, ['text'] )
+        elif args.table == "zones":
+            prettyprint_table( rdtfile.zones.rows )
         else:
-            print("Not implemented.")
+            raise ValueError("list {} shouldn't happen".format(args.table))
 
     else:
         print("Unknown subcommand {}".format(args.subparser_name))
