@@ -7,6 +7,9 @@ import csv
 import copy
 import pdb
 import pprint
+from collections.abc import MutableMapping
+
+DEBUG = False
 
 def bcd_decode(barray):
     # Little Endian decoder
@@ -81,7 +84,7 @@ class Field():
 
             # Examine the squelch coding bits
             squelch_type_id = ( self._value[1] & 0b11000000 ) >> 6
-            print("squelch_type_id=", squelch_type_id)
+            if DEBUG: print("squelch_type_id=", squelch_type_id)
             if squelch_type_id == 0:
                 return "CTCSS {}".format(tone / 10.0)
             elif squelch_type_id==1:
@@ -158,14 +161,55 @@ class Field():
                 pass
             
             return True
+    
+class Row(MutableMapping):
+    """Class Row encapsulates a set of fields, indexable by id,
+    Providing additional metadata including display order, deletion marker
+    
+    by subclassing, [deleted] can still be accessed/set as a key, but won't
+    show up in iteration.
+    """
+
+    def __init__(self, fields: dict, ordered_field_list: list = []):
+        self._deleted = True                # Change to False once loaded 'n checked
+        self._storage = copy.deepcopy(fields)
+
+        if ordered_field_list:
+            self._ordered_field_list = ordered_field_list
+        else:
+            self._ordered_field_list = list( self._storage.keys() )
+    def __getitem__(self, key):
+        if key == "deleted":
+            return self._deleted
+        else:
+            return self._storage[key]
+    def __setitem__(self, key, value):
+        if key == "deleted":
+            self._deleted = value
+        else:
+            self._storage[key] = value
+    def __delitem__(self, key):
+        # Forgetting to delete from the _ordered_field_list leads to subtle error
+        self._ordered_field_list.pop( self._ordered_field_list.index(key) )
+        del self._storage[key]
+    def __iter__(self):
+        # overloadd to iterate in specific order
+        #return iter(self._storage)
+        self._iter_list = copy.copy(self._ordered_field_list)
+        return self
+    def __next__(self):
+        if len(self._iter_list) > 0:
+            key = self._iter_list.pop(0)    # pop the head of the list
+            return key
+        raise StopIteration
+    def __len__(self):
+        return len(self._storage)
 
 class Table():
     num_records = 1         # Must override except for general_settings
     zero_value  = 0xFF      # Overrride if diff
-
+    
     def _read_fields(self, fn):
-        print("_read_fields")
-
         fields = {}
         field_struct = "< "
         field_names  = []
@@ -184,10 +228,11 @@ class Table():
                 row['bits']   = int( row['bits'] )
 
                 # Diagnostics
-                print( "bitoffset : {}".format(bitoffset))
-                print( "row_offset: {}".format(row['offset']))
-                print( "row_bits  : {}".format(row['bits']))
-                print()
+                if DEBUG:
+                    print( "bitoffset : {}".format(bitoffset))
+                    print( "row_offset: {}".format(row['offset']))
+                    print( "row_bits  : {}".format(row['bits']))
+                    print()
 
                 while row['offset'] > bitoffset:
                     # Insert octet-aligned padding, if possible
@@ -268,11 +313,12 @@ class Table():
                     active_bitfield = False
                     bitfield_name = "ERROR"
 
-        print("finished reading csv")
-        print( field_names )
-        print( field_struct )
-        print( fields )
-        print()
+        if DEBUG:
+            print("finished reading csv")
+            print( field_names )
+            print( field_struct )
+            print( fields )
+            print()
         #pdb.set_trace()
         self.field_names = field_names
         self.field_struct_string = field_struct
@@ -317,6 +363,11 @@ class Table():
         By this point there should be no type:bitfield raw bitfields left,
         so it is okay to check for [0:8] == bitfield
         """
+        if DEBUG:
+            print("_rename_bitfield_subfields()")
+            print( fieldset )
+            pdb.set_trace()
+            print( list( fieldset.items() ) )
         # We can't rename keys during iteration
         rename_list = []
         for fid, field in fieldset.items():
@@ -335,6 +386,12 @@ class Table():
         
         return fieldset
 
+    def _record_is_deleted(self, data):
+        if data[self.deletion_marker_offset] == self.deletion_marker_value:
+            return True
+        else:
+            return False
+        
     def add_lut(self, fieldid, lut):
         self.fields[fieldid].add_lut(lut)
 
@@ -344,37 +401,50 @@ class Table():
 
         self.rows = []
         for i in range(self.num_records):
-            print("i=", i)
-            fieldset = copy.deepcopy(self.fields)
+            if DEBUG:
+                print("i=", i)
+                print(self.fields)
+                pdb.set_trace()
+            ###fieldset = copy.deepcopy(self.fields)
+            row = Row(self.fields)
             # TODO subset the data outside of here
-            # TODO include record offset with i and recordsize
             current_record_offset   = self.first_record_offset + (self.record_length * i)
             current_record_end      = current_record_offset + self.record_length
-            print("DEBUG: field_struct_string=", self.field_struct_string)
+
+            # Check for deletion marker:
+            row['deleted'] = self._record_is_deleted( data[current_record_offset: current_record_end] )
+            
+            if DEBUG: print("DEBUG: field_struct_string=", self.field_struct_string)
             field_values =  self.field_struct.unpack( data[ current_record_offset:current_record_end ] )
             fields_raw = dict(zip(self.field_names, field_values))
-            print("fields_raw=", fields_raw)
+            if DEBUG: print("fields_raw=", fields_raw)
 
             # Once a bitfield is expanded into its consituent subfields, mark for deletion
             deletion_list = []
             for k,v in fields_raw.items():
-                print("k,v=", k, v)
-                if self._expand_bitfields(k, v, fieldset):
+                if DEBUG: print("k,v=", k, v)
+                if self._expand_bitfields(k, v, row):
                     # Has been expanded completely -- okay to remove (but not during iteration)
                     deletion_list.append(k)
-                fieldset[k].value = v
-                fieldset[k].validate()
+                ###fieldset[k].value = v
+                row[k].value = v
+                ###fieldset[k].validate()
+                row[k].validate()
 
             # Remove the raw bitfields
             for k in deletion_list:
-                del fieldset[k]            
+                ###del fieldset[k]
+                del row[k]
             # Strip the leading "bitfieldN:" from subfield ids
-            fieldset = self._rename_bitfield_subfields(fieldset)
+            ###fieldset = self._rename_bitfield_subfields(fieldset)
+            row = self._rename_bitfield_subfields(row)
 
-            print("fieldset post load =")
-            pprint.pprint( fieldset )
-            #pdb.set_trace()
-            self.rows.append( fieldset )
+            if DEBUG:
+                print("fieldset post load =")
+                pprint.pprint( fieldset )
+                #pdb.set_trace()
+            ###self.rows.append( fieldset )
+            self.rows.append( row )
     
     def dump(self):
         pass
@@ -391,6 +461,9 @@ class Channel(Table):
     end_record_offset = first_record_offset + record_length
     zero_value = 0xFF
 
+    deletion_marker_offset  = 16    # bytes
+    deletion_marker_value   = 0xFF
+
     #channel_struct = struct.Struct("<c c c c c x h c B c B B x c x 4s 4s 2s 2s c c x x 32s")
     def __init__(self):
         print("Channel init")
@@ -402,6 +475,9 @@ class Settings(Table):
     first_record_offset = 8805
     record_length = 144
     zero_value = 0xFF
+
+    deletion_marker_offset  = 0x00  # Not really sure best way to do this,
+    deletion_marker_value   = 0x01  # since Settings has only one row / can't be del'd
 
     def __init__(self):
         print("General init")
@@ -592,11 +668,27 @@ def record_prettyprint(record):
     max_id_width    = max(field_id_lens)
     max_descr_width = max(field_descr_lens)
     print("{id:{width_id}s} {descr:{width_descr}s} Value".format(id="key", width_id=max_id_width, descr="Description", width_descr=max_descr_width))
+    print("-"*80)
     for field in record.values():
         print("{id:{width_id}s} {descr:{width_descr}s} {repr}".format(\
             id=field.id, width_id=max_id_width, \
             descr=field.description, width_descr=max_descr_width, \
             repr=field))
+
+def prettyprint_table(rows, field_names = ['name']):
+    """Pretty print a table, but only a limited subset of fields."""
+    # TODO: hardcoded no. of digits id
+    format_string = "{:04d}\t"
+    format_string += "{:20.20s} " * len(field_names)
+
+    print("#\t" + ("{:20.20s} "*len(field_names)).format(*field_names) )
+    print("-"*80)
+    for i,row in enumerate(rows):
+        if not row['deleted']:
+            # row will be a fieldset, a dict of fields keyed on id
+            field_values = [str(row[k]) for k in field_names]
+            # if not row['deleted']:
+            print( format_string.format(i+1, *field_values) )   # ids are 1-indexed :-/
 
 def main():
     parser = argparse.ArgumentParser(description = "Read and write RDT codeplug files")
@@ -632,7 +724,11 @@ def main():
             raise ValueError("subcommand neither get nor set -- should have been caught by arg parser")
         
     elif args.subparser_name == "channels":
-        pass
+        if args.subcommand == "list":
+            prettyprint_table( rdtfile.channels.rows, ['name', 'contact_name'] )
+        else:
+            print("Not implemented.")
+
     else:
         print("Unknown subcommand {}".format(args.subparser_name))
         return 1
