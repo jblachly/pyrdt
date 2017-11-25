@@ -55,13 +55,28 @@ class Field():
         if not self.loaded:
             return "<UNINITIALIZED>"
         if self.zero_valued():
-            return "Unset/Disabled"
-        
+            # It is possible that a valid value from LUT is also the unset/disabled value
+            # (e.g., 0xFF/255 for settings:mode. In this case, we consider it valid.
+            try:
+                if self.value in self.lut:
+                    pass
+                else:
+                    return "Unset/Disabled"
+            except AttributeError:
+                return "Unset/Disabled"
+
         if self.type == "ascii":
             return self._value.decode('ascii')
         elif self.type == "unicode" or self.type == "utf16":
             return self._value.decode('utf-16').rstrip('\x00')
         elif self.type == "int" or self.type == "binary":
+            try:    # Lookup table
+                if self.value in self.lut:
+                    return "{} {}".format(self.lut[self.value], list(self.lut.values()))
+                else:
+                    return "**Value {} is not in the lookup table: {}".format(self.value, self.lut)
+            except AttributeError:
+                pass
             try:    # transform
                 pass
             except AttributeError:
@@ -73,9 +88,21 @@ class Field():
             else:
                 return "**UNANTICIPATED int/binary SITUATION**"
         elif self.type == "bcd":    # Little Endian
-            return str( bcd_decode(self._value) )
+            # Each nybble (4 bits) is 1 decimal digit in BCD encoding
+            dec_digits = self.bits // 4
+            padded_string = "{number:0{num_digits}d}".format( \
+                number=int(bcd_decode(self._value)), \
+                num_digits=dec_digits )
+            return padded_string
+            #return str( bcd_decode(self._value) )
         elif self.type == "rev_bcd":    # Big Endian
-            return str( bcd_decode( reversed(self._value) ) )
+            # Each nybble (4 bits) is 1 decimal digit in BCD encoding
+            dec_digits = self.bits // 4
+            padded_string = "{number:0{num_digits}d}".format( \
+                number=int(bcd_decode( reversed(self._value) ) ),\
+                num_digits=dec_digits )
+            return padded_string
+            #return str( bcd_decode( reversed(self._value) ) )
         elif self.type == "bcdt":
             # Same as BCD but 2-msb of second octet encode squelch type
             value_copy = bytearray(self._value)
@@ -399,6 +426,7 @@ class Table():
             return False
         
     def add_lut(self, fieldid, lut):
+        #TODO lookup bitfieldN:name
         self.fields[fieldid].add_lut(lut)
 
     def load(self, data):
@@ -730,8 +758,6 @@ class GeneralSettings(Table):
 
 class RDTFile():
     def __init__(self, fn):
-        print("Loading {}...".format(fn), end='', flush=True)
-
         self.settings   = Settings()
         self.channels   = Channel()
         self.contacts   = Contact()
@@ -742,7 +768,8 @@ class RDTFile():
 
         with open(fn, "rb") as fi:
             file_contents = fi.read()
-        
+
+        print("Loading {}...".format(fn), end='', flush=True)
         self.settings.load(file_contents)
         self.channels.load(file_contents)
         self.contacts.load(file_contents)
