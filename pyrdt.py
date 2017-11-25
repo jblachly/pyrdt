@@ -492,7 +492,7 @@ class Table():
                 del row[k]
             # Strip the leading "bitfieldN:" from subfield ids
             ###fieldset = self._rename_bitfield_subfields(fieldset)
-            #row = self._rename_bitfield_subfields(row)
+            #row = self._rename_bitfield_subfields(row) # no longer necessary
 
             if DEBUG:
                 print("row post load =")
@@ -527,6 +527,18 @@ class Channel(Table):
     #channel_struct = struct.Struct("<c c c c c x h c B c B B x c x 4s 4s 2s 2s c c x x 32s")
     def __init__(self):
         super().__init__(Channel.tabledef_fn)
+
+        self.add_lut("squelch", {0: 'tight', 1: 'normal'})
+        self.add_lut("bandwidth", {0: "12.5 kHz", 1: "25 kHz"})
+        self.add_lut("channel_mode", {1: 'analog', 2: 'digital'})
+        self.add_lut("privacy", {0: 'none', 1: 'basic', 2: 'enhanced'})
+        self.add_lut("display_ptt_id", {0: 'on', 1: 'off'})     # TODO: verify (backwards)
+        self.add_lut("rx_ref_frequency", {0: 'low', 1: 'medium', 2: 'high'})
+        self.add_lut("admit_criteria", {0: 'always', 1: 'channel free', 2: 'CTCSS/DCS', 3: 'color code'})
+        self.add_lut("power", {0: 'low', 1: 'high'})
+        self.add_lut("qt_reverse", {0: '180', 1: '120'})
+        self.add_lut("tx_ref_frequency", {0: 'low', 1: 'medium', 2: 'high'})
+
 
 class Contact(Table):
     tabledef_fn = "fields_contact.csv"
@@ -831,9 +843,12 @@ def prettyprint_table(rows, field_names = ['name']):
 
 def main():
     print("\npyRDT by AE5ST\n")
-    url = "http://www.iz2uuf.net/wp/index.php/2016/06/04/tytera-dm380-codeplug-binary-format/"
-    print("*** Special thanks to IZ2UUF for documenting the RDT file format:")
-    print("    {}\n".format(url))
+    url1 = "http://www.iz2uuf.net/wp/index.php/2016/06/04/tytera-dm380-codeplug-binary-format/"
+    url2 = "https://github.com/travisgoodspeed/md380tools/blob/master/chirp/md380.py"
+    print("*** Special thanks to IZ2UUF and Travis Goodspeed (KK4VCZ) for documenting the RDT file format:")
+    print("    {}".format(url1))
+    print("    {}\n".format(url2))
+    print("*** and Travis Goodspeed ")
 
     parser = argparse.ArgumentParser(description = "Read and write RDT codeplug files")
     parser.add_argument("-f", "--file", help="RDT codeplug file")
