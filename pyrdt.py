@@ -184,12 +184,17 @@ class Row(MutableMapping):
         else:
             return self._storage[key]
     def __setitem__(self, key, value):
+        # Because of custom iterator, forgetting to add to _ordered_field_list
+        # leads to a subtle error
         if key == "deleted":
             self._deleted = value
         else:
+            if key not in self._ordered_field_list:
+                self._ordered_field_list.append(key)
             self._storage[key] = value
     def __delitem__(self, key):
-        # Forgetting to delete from the _ordered_field_list leads to subtle error
+        # Because of custom iterator, forgetting to delete from _ordered_field_list
+        # leads to a subtle error
         self._ordered_field_list.pop( self._ordered_field_list.index(key) )
         del self._storage[key]
     def __iter__(self):
@@ -364,10 +369,9 @@ class Table():
         so it is okay to check for [0:8] == bitfield
         """
         if DEBUG:
-            print("_rename_bitfield_subfields()")
-            print( fieldset )
-            pdb.set_trace()
+            print("\n_rename_bitfield_subfields()")
             print( list( fieldset.items() ) )
+            pdb.set_trace()
         # We can't rename keys during iteration
         rename_list = []
         for fid, field in fieldset.items():
@@ -384,6 +388,8 @@ class Table():
             fieldset[subfield_name] = fieldset.pop(fid)
             fieldset[subfield_name].id = subfield_name
         
+        if DEBUG:
+            pdb.set_trace()
         return fieldset
 
     def _record_is_deleted(self, data):
@@ -431,6 +437,9 @@ class Table():
                 row[k].validate()
 
             # Remove the raw bitfields
+            if DEBUG:
+                print("\nREMOVE RAW BITFIELDS:")
+                print("deletion_list: ", deletion_list)
             for k in deletion_list:
                 ###del fieldset[k]
                 del row[k]
@@ -439,8 +448,9 @@ class Table():
             row = self._rename_bitfield_subfields(row)
 
             if DEBUG:
-                print("fieldset post load =")
-                pprint.pprint( fieldset )
+                print("row post load =")
+                pprint.pprint( row )
+                print( list(row.keys()) )
                 #pdb.set_trace()
             ###self.rows.append( fieldset )
             self.rows.append( row )
@@ -743,7 +753,7 @@ class RDTFile():
 
         print("ok\n")
 
-def record_prettyprint(record):
+def prettyprint_record(record):
     #TODO need to specify field order somehow
     #TODO: is dict.values() deterministic for any fixed dict?
     field_id_lens   = [len(field.id) for field in record.values()]
@@ -781,7 +791,7 @@ def main():
 
     parser = argparse.ArgumentParser(description = "Read and write RDT codeplug files")
     parser.add_argument("-f", "--file", help="RDT codeplug file")
-    subparsers = parser.add_subparsers(dest="subparser_name", help="Subcommand help")
+    subparsers = parser.add_subparsers(title="Subcommand", dest="subparser_name", help="Subcommand help")
 
     settings_cmd = subparsers.add_parser("settings", help="General radio settings")
     settings_cmd.add_argument("subcommand", choices=['get','set'], help="What to do with settings")
@@ -790,14 +800,26 @@ def main():
     list_cmd = subparsers.add_parser("list", help="List items in table form")
     list_cmd.add_argument("table", choices=['channels', 'contacts', 'rxgroups', 'scanlists', 'textmessages', 'zones'], help="Which table?")
 
+    details_cmd = subparsers.add_parser("details", help="Get details about specific table entry")
+    details_cmd.add_argument("table", choices=['channels', 'contacts', 'rxgroups', 'scanlists', 'textmessages', 'zones'], help="Which table?")
+    details_cmd.add_argument("row", help="Which row # in the table?")
+
+    export_cmd = subparsers.add_parser("export", help="Export a table from the RDT codeplug file to a CSV")
+    export_cmd.add_argument("table", choices=['channels', 'contacts', 'rxgroups', 'scanlists', 'textmessages', 'zones'], help="Which table?")
+
+    import_cmd = subparsers.add_parser("import", help="Import a table from a CSV to the RDT codeplug file")
+    import_cmd.add_argument("table", choices=['channels', 'contacts', 'rxgroups', 'scanlists', 'textmessages', 'zones'], help="Which table?")
+    
     args = parser.parse_args()
 
+    # TODO: detect None subcommand before rdt file parsing and print help
+    # TODO: validate file exists
     rdtfile = RDTFile(args.file)
 
     if args.subparser_name == "settings":
         if args.subcommand == "get":
             if args.field == "all":
-                record_prettyprint( rdtfile.settings.rows[0] )
+                prettyprint_record( rdtfile.settings.rows[0] )
             elif args.field:
                 if args.field in rdtfile.settings.field_names:
                     print("{}\t{}".format(args.field, rdtfile.settings.rows[0][args.field]))
@@ -827,6 +849,10 @@ def main():
         else:
             raise ValueError("list {} shouldn't happen".format(args.table))
 
+    elif args.subparser_name == "details":
+        row_num = int(args.row)
+        prettyprint_record( rdtfile.__getattribute__(args.table).rows[row_num] )
+    
     else:
         print("Unknown subcommand {}".format(args.subparser_name))
         return 1
